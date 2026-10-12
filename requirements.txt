@@ -3,3 +3,7 @@ openpyxl
 scikit-learn
 matplotlib
 torch
+joblib
+ipykernel
+nbformat
+jupyter

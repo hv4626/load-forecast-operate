@@ -21,7 +21,27 @@ This repo does the same for two SolarSquare rooftop meters, not an ISO.
 
 Skill over last week is ~1%. That is not production skill.
 
-## Run
+## Notebook (use this on a new dump)
+
+[`notebooks/load_forecast.ipynb`](notebooks/load_forecast.ipynb) is the R&D model.
+
+Set `DUMP` to any lifetime Excel/CSV and run all cells. It trains a direct 48 h gradient-boosting model, scores it against yesterday-copy and last-week-copy, and **issues the winner**.
+
+Holdout on the bundled dumps (14 days, 145 origins × 48 h):
+
+| Site | Winner | wMAPE | vs yesterday | vs last week | MAE |
+|---|---|---|---|---|---|
+| KA-1608 | **GBM** | **23.9%** | 29.3% | 32.5% | **0.10 kW** |
+| TL-2362 | yesterday-copy | 57.4% | (best) | 61.8% | 1.78 kW |
+
+KA is a regular house: the GBM cuts error ~18% vs copying yesterday. TL is occupancy spikes; copying yesterday is the honest forecast and the notebook selects it automatically (`burst = std/mean ≥ 1`).
+
+```bash
+source .venv/bin/activate
+jupyter notebook notebooks/load_forecast.ipynb
+```
+
+## Run the Operate desk (research UI)
 
 ```bash
 python3 -m venv .venv
@@ -43,6 +63,7 @@ It is not in git.
 ## Layout
 
 ```
+notebooks/load_forecast.ipynb   R&D model — point DUMP at a new Excel/CSV
 src/prepare.py     5-minute meters → hourly kW + Open-Meteo
 src/model.py       TiDE, origin-locked similar-day skip, monotone quantiles
 src/train.py       per-site train, baselines

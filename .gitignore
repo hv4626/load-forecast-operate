@@ -6,3 +6,6 @@ data/*.parquet
 .DS_Store
 src/__pycache__/
 .python-version
+notebooks/outputs/
+outputs/*.joblib
+outputs/forecast_*.csv
