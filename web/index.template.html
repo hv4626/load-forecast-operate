@@ -16,9 +16,7 @@
       --faint: #A29B90;
       --hair: rgba(23,20,15,0.12);
       --accent: #DC5A1E;
-      --truth: #17140F;
       --forecast: #2F6FED;
-      --band: rgba(47,111,237,0.18);
       --wx: #C45C26;
     }
     * { box-sizing: border-box; }
@@ -34,7 +32,7 @@
     .toolbar { display: flex; flex-wrap: wrap; gap: 12px; padding: 16px 28px; border-bottom: 1px solid var(--hair); align-items: end; }
     .field { display: flex; flex-direction: column; gap: 6px; }
     .field label { font-family: "IBM Plex Mono", monospace; font-size: 10px; letter-spacing: 0.12em; color: var(--faint); text-transform: uppercase; }
-    select { appearance: none; background: var(--bg); border: 1px solid var(--hair); padding: 8px 12px; font-size: 13px; min-width: 220px; color: var(--ink); }
+    select { appearance: none; background: var(--bg); border: 1px solid var(--hair); padding: 8px 12px; font-size: 13px; min-width: 180px; color: var(--ink); }
     .stat { font-family: "IBM Plex Mono", monospace; font-size: 12px; color: var(--muted); }
     .stat b { color: var(--ink); font-weight: 500; }
     .grid { display: grid; grid-template-columns: 1.4fr 0.8fr; gap: 0; }
@@ -43,18 +41,23 @@
     .panel h2 { margin: 0 0 4px; font-size: 13px; font-weight: 600; }
     .legend { color: var(--faint); font-size: 11px; font-family: "IBM Plex Mono", monospace; margin-bottom: 12px; }
     canvas { width: 100% !important; height: 280px !important; }
+    canvas.tall { height: 360px !important; }
     .kpis { display: grid; grid-template-columns: repeat(4, 1fr); border-top: 1px solid var(--hair); }
     .kpi { padding: 16px 28px; border-right: 1px solid var(--hair); }
     .kpi:last-child { border-right: 0; }
     .kpi .k { font-family: "IBM Plex Mono", monospace; font-size: 10px; letter-spacing: 0.12em; color: var(--faint); text-transform: uppercase; }
     .kpi .v { font-size: 22px; letter-spacing: -0.03em; margin-top: 6px; }
     .kpi .u { color: var(--muted); font-size: 12px; }
+    .metrics { padding: 8px 28px 28px; border-top: 1px solid var(--hair); }
+    .metrics h2 { margin: 16px 0 4px; font-size: 13px; font-weight: 600; }
     table { width: 100%; border-collapse: collapse; font-size: 12px; font-family: "IBM Plex Mono", monospace; }
     th, td { text-align: right; padding: 8px 10px; border-bottom: 1px solid var(--hair); }
     th:first-child, td:first-child { text-align: left; }
     th { color: var(--faint); font-weight: 500; }
+    tr.winner td { font-weight: 500; }
+    tr.winner td:first-child::after { content: " · issued"; color: var(--forecast); font-weight: 400; }
     .hidden { display: none; }
-    .note { padding: 12px 28px 40px; color: var(--muted); font-size: 12px; line-height: 1.5; max-width: 80ch; }
+    .note { padding: 12px 28px 40px; color: var(--muted); font-size: 12px; line-height: 1.5; max-width: 90ch; }
     @media (max-width: 900px) {
       .grid { grid-template-columns: 1fr; }
       .panel + .panel { border-left: 0; border-top: 1px solid var(--hair); }
@@ -65,9 +68,10 @@
 <body>
   <div class="shell">
     <header>
-      <div class="brand">System Load Forecast <span id="model-name">tide</span> <span id="verdict" style="color:#DC5A1E">FAIL · not for dispatch</span></div>
+      <div class="brand">System Load Forecast <span id="model-name">gbm</span> <span id="verdict" style="color:#DC5A1E">FAIL · not for dispatch</span></div>
       <nav>
         <button class="tab" data-mode="operate" aria-selected="true">Operate</button>
+        <button class="tab" data-mode="realized">Realized</button>
         <button class="tab" data-mode="verify">Verify</button>
       </nav>
     </header>
@@ -79,104 +83,349 @@
           <select id="site"></select>
         </div>
         <div class="field">
-          <label>Horizon</label>
-          <select disabled><option>2D · 48 h</option></select>
+          <label>Past data</label>
+          <select id="lookback">
+            <option value="48">2D · 48 h</option>
+            <option value="168" selected>7D · 168 h</option>
+            <option value="336">14D · 336 h</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Predict</label>
+          <select id="horizon">
+            <option value="12">next 12 h</option>
+            <option value="24" selected>next 24 h</option>
+            <option value="48">next 48 h</option>
+          </select>
         </div>
         <div class="stat">Issued <b id="issued">—</b></div>
         <div class="stat">Peak <b id="peak">—</b></div>
       </div>
       <div class="grid">
         <div class="panel">
-          <h2>Demand</h2>
-          <div class="legend">Actual · Pravah-style TiDE p50 · p10–p90 band · kW</div>
-          <canvas id="load-chart"></canvas>
+          <h2 id="series-title">Demand</h2>
+          <div class="legend" id="load-legend">Actual (past) · issued p50 · p10–p90 · kW</div>
+          <canvas id="load-chart" class="tall"></canvas>
         </div>
         <div class="panel">
           <h2>Weather</h2>
           <div class="legend" id="wx-legend">Station proxy · °C</div>
-          <canvas id="wx-chart"></canvas>
+          <canvas id="wx-chart" class="tall"></canvas>
         </div>
       </div>
       <div class="kpis">
         <div class="kpi"><div class="k">Now</div><div class="v" id="kpi-now">— <span class="u">kW</span></div></div>
-        <div class="kpi"><div class="k">48 h peak</div><div class="v" id="kpi-peak">— <span class="u">kW</span></div></div>
+        <div class="kpi"><div class="k" id="kpi-peak-label">24 h peak</div><div class="v" id="kpi-peak">— <span class="u">kW</span></div></div>
         <div class="kpi"><div class="k">Holdout wMAPE</div><div class="v" id="kpi-mape">— <span class="u">%</span></div></div>
         <div class="kpi"><div class="k">Holdout MAE</div><div class="v" id="kpi-mae">— <span class="u">kW</span></div></div>
+      </div>
+      <div class="metrics">
+        <h2>Holdout metrics · this site</h2>
+        <div class="legend" id="split-legend">Trailing 14-day test · 7-day val · 48 h scored horizon</div>
+        <table id="site-metrics">
+          <thead>
+            <tr>
+              <th>Model</th><th>MAE kW</th><th>RMSE kW</th><th>wMAPE %</th>
+              <th>Train h</th><th>Test h</th><th>Origins</th><th>Scored h</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div id="realized" class="hidden">
+      <div class="toolbar">
+        <div class="field">
+          <label>Site</label>
+          <select id="realized-site"></select>
+        </div>
+        <div class="stat" id="realized-blurb">12 Oct house-load issue against the meter hours after that forecast</div>
+      </div>
+      <div class="panel" style="min-height:0">
+        <h2 id="realized-title">Issued forecast vs new dump</h2>
+        <div class="legend" id="realized-legend">Blue band is the 12 Oct issue. Black is meter load in that window.</div>
+        <canvas id="realized-chart" class="tall"></canvas>
+      </div>
+      <div class="kpis">
+        <div class="kpi"><div class="k">Deviation MAE</div><div class="v" id="rz-mae">— <span class="u">kW</span></div></div>
+        <div class="kpi"><div class="k">Bias · load − p50</div><div class="v" id="rz-bias">— <span class="u">kW</span></div></div>
+        <div class="kpi"><div class="k">Issued band width</div><div class="v" id="rz-band">— <span class="u">kW</span></div></div>
+        <div class="kpi"><div class="k">Inside p10–p90</div><div class="v" id="rz-cov">— <span class="u"></span></div></div>
+      </div>
+      <div class="metrics">
+        <h2>Last issue, scored on this dump</h2>
+        <div class="legend" id="realized-summary"></div>
+        <table id="realized-table">
+          <thead>
+            <tr>
+              <th>Site</th><th>Issued</th><th>Hours</th>
+              <th>MAE kW</th><th>Bias kW</th><th>RMSE kW</th>
+              <th>Band kW</th><th>Inside band</th>
+              <th>Quoted MAE</th><th>Quoted wMAPE</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
       </div>
     </div>
 
     <div id="verify" class="hidden">
-      <div class="panel">
-        <h2>Lead-time skill · last 14 days</h2>
-        <div class="legend">Lower is better. Seasonal naive repeats yesterday’s 48 h.</div>
+      <div class="panel" style="min-height:0">
+        <h2>Uniform 14-day holdout · all models</h2>
+        <div class="legend">Same trailing split for every model. Train / 7-day val / last 14 days test. Rolling origin every hour, 48 h horizon.</div>
         <table id="verify-table">
           <thead>
-            <tr><th>Model</th><th>wMAPE %</th><th>MAPE %</th><th>MAE kW</th><th>p10–p90 coverage</th></tr>
+            <tr>
+              <th>Site</th><th>Model</th><th>MAE kW</th><th>RMSE kW</th><th>wMAPE %</th>
+              <th>Train h</th><th>Test h</th><th>Origins</th>
+            </tr>
           </thead>
           <tbody></tbody>
         </table>
-        <h2 style="margin-top:28px">MAPE by lead hour (TiDE)</h2>
-        <canvas id="lead-chart"></canvas>
+        <h2 style="margin-top:28px">Same method, longer test</h2>
+        <div class="legend">Retrain GBM on remaining train. Naives re-scored only. MAE in kW.</div>
+        <table id="sweep-table">
+          <thead>
+            <tr>
+              <th>Site</th><th>Test days</th><th>Test h</th><th>Train h</th>
+              <th>GBM MAE</th><th>GBM RMSE</th>
+              <th>Yesterday MAE</th><th>Last-week MAE</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
       </div>
     </div>
-    <p class="note">
-      Rooftop load from RSSEKA1608 and RSSETL2362 (5-minute meters, hourly mean).
-      Weather is Open-Meteo at Bengaluru / Hyderabad, used as future covariates the way
-      Operate uses NWP. Model is a quantile TiDE (lookback 168 h, horizon 48 h).
+    <p class="note" id="desk-note">
+      Past load is the meter. Forward hours are the issued model.
+      Weather is Open-Meteo at the city, not the rooftop.
+      Do not dispatch from this desk.
     </p>
   </div>
   <script>
     const DATA = /*__OPERATE_JSON__*/;
     const siteSel = document.getElementById("site");
+    const hzSel = document.getElementById("horizon");
+    const lbSel = document.getElementById("lookback");
     const tabs = document.querySelectorAll(".tab");
-    let loadChart, wxChart, leadChart;
+    let loadChart, wxChart, realizedChart;
+    const MAX_H = DATA.horizon_h || 48;
+    const LABELS = { gbm: "GBM", yesterday: "Yesterday-copy", last_week: "Last-week-copy", tide: "TiDE" };
+    const ORDER = ["gbm", "yesterday", "last_week", "tide"];
 
-    document.getElementById("model-name").textContent = DATA.model || "tide";
+    Array.from(hzSel.options).forEach((opt) => {
+      if (Number(opt.value) > MAX_H) opt.remove();
+    });
+    hzSel.value = String(DATA.default_horizon_h || 24);
+    lbSel.value = String(DATA.default_lookback_h || 168);
+
+    document.querySelector(".brand").childNodes[0].textContent = (DATA.product || "System Load Forecast") + " ";
+    document.getElementById("model-name").textContent = DATA.model || "gbm";
+    if (DATA.note) document.getElementById("desk-note").textContent = DATA.note;
+    if (DATA.chart_title) document.getElementById("series-title").textContent = DATA.chart_title;
     if (DATA.verdict) document.getElementById("verdict").textContent = DATA.go_live ? "PASS" : (DATA.verdict + " · not for dispatch");
     Object.values(DATA.sites || {}).forEach((s, i) => {
       const opt = document.createElement("option");
       opt.value = s.id;
       opt.textContent = `${s.label} — ${s.subtitle}`;
-      if (i === 1) opt.selected = true;
+      if (i === 0) opt.selected = true;
       siteSel.appendChild(opt);
+    });
+
+    const realizedSel = document.getElementById("realized-site");
+    Object.values(DATA.sites || {}).forEach((s, i) => {
+      const opt = document.createElement("option");
+      opt.value = s.id;
+      opt.textContent = `${s.label} — ${s.subtitle}`;
+      if (i === 0) opt.selected = true;
+      realizedSel.appendChild(opt);
     });
 
     tabs.forEach((btn) => {
       btn.addEventListener("click", () => {
         tabs.forEach((b) => b.setAttribute("aria-selected", b === btn));
-        document.getElementById("operate").classList.toggle("hidden", btn.dataset.mode !== "operate");
-        document.getElementById("verify").classList.toggle("hidden", btn.dataset.mode !== "verify");
+        ["operate", "verify", "realized"].forEach((id) => {
+          document.getElementById(id).classList.toggle("hidden", btn.dataset.mode !== id);
+        });
+        if (btn.dataset.mode === "realized") renderRealized();
       });
     });
 
     function fmtKw(v) { return v == null || Number.isNaN(v) ? "—" : Number(v).toFixed(2); }
+    function fmt1(v) { return v == null || Number.isNaN(v) ? "—" : Number(v).toFixed(1); }
+    function fmt3(v) { return v == null || Number.isNaN(v) ? "—" : Number(v).toFixed(3); }
+    function fmtInt(v) { return v == null ? "—" : Number(v).toLocaleString("en-IN"); }
     function fmtTime(iso) {
       const d = new Date(iso);
       return d.toLocaleString("en-IN", { timeZone: "Asia/Kolkata", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+    }
+    function horizonH() {
+      const h = parseInt(hzSel.value, 10);
+      return Number.isFinite(h) ? Math.min(h, MAX_H) : 24;
+    }
+    function lookbackH() {
+      const h = parseInt(lbSel.value, 10);
+      return Number.isFinite(h) ? h : 168;
     }
 
     function renderSite(id) {
       const s = DATA.sites[id];
       if (!s) return;
+      const H = horizonH();
+      const L = lookbackH();
+      const originMs = new Date(s.origin).getTime();
+      const histFrom = originMs - L * 3600 * 1000;
+      const actuals = (s.actuals || []).filter((p) => new Date(p.ts).getTime() >= histFrom);
+      const fc = (s.forecast || []).slice(0, H);
       document.getElementById("wx-legend").textContent = `${s.city} Open-Meteo · °C`;
+      document.getElementById("load-legend").textContent =
+        `Past ${L} h ${DATA.series_label || "actual"} · next ${H} h ${s.winner_label || "issued"} p50 · p10–p90 · kW`;
       document.getElementById("issued").textContent = fmtTime(s.origin);
-      const peak = s.peak;
+      let peak = null;
+      if (fc.length) {
+        const i = fc.reduce((best, p, k) => (p.p50 > fc[best].p50 ? k : best), 0);
+        peak = { ts: fc[i].ts, kw: fc[i].p50 };
+      }
       document.getElementById("peak").textContent = peak ? `${fmtKw(peak.kw)} kW at ${fmtTime(peak.ts)}` : "—";
-      const last = s.actuals[s.actuals.length - 1];
+      const last = actuals[actuals.length - 1];
+      const hold = s.holdout || {};
       document.getElementById("kpi-now").innerHTML = `${fmtKw(last?.load_kw)} <span class="u">kW</span>`;
+      document.getElementById("kpi-peak-label").textContent = `${H} h peak`;
       document.getElementById("kpi-peak").innerHTML = `${fmtKw(peak?.kw)} <span class="u">kW</span>`;
-      document.getElementById("kpi-mape").innerHTML = `${s.metrics?.wmape != null ? s.metrics.wmape.toFixed(1) : "—"} <span class="u">%</span>`;
-      document.getElementById("kpi-mae").innerHTML = `${s.metrics?.mae != null ? s.metrics.mae.toFixed(2) : "—"} <span class="u">kW</span>`;
+      document.getElementById("kpi-mape").innerHTML = `${hold.wmape != null ? hold.wmape.toFixed(1) : "—"} <span class="u">%</span>`;
+      document.getElementById("kpi-mae").innerHTML = `${hold.mae != null ? hold.mae.toFixed(3) : "—"} <span class="u">kW</span>`;
+      document.getElementById("split-legend").textContent =
+        `Trailing ${hold.test_days || 14}d test · ${hold.val_days || 7}d val · train ${fmtInt(hold.train_hours)} h · test ${fmtInt(hold.test_calendar_hours)} h · ${fmtInt(hold.n_test_origins)} origins × 48 h`;
 
-      const actual = s.actuals.map((p) => ({ x: p.ts, y: p.load_kw }));
-      const p50 = s.forecast.map((p) => ({ x: p.ts, y: p.p50 }));
-      const p10 = s.forecast.map((p) => ({ x: p.ts, y: p.p10 }));
-      const p90 = s.forecast.map((p) => ({ x: p.ts, y: p.p90 }));
+      const actual = actuals.map((p) => ({ x: p.ts, y: p.load_kw }));
+      const p50 = fc.map((p) => ({ x: p.ts, y: p.p50 }));
+      const p10 = fc.map((p) => ({ x: p.ts, y: p.p10 }));
+      const p90 = fc.map((p) => ({ x: p.ts, y: p.p90 }));
       const temps = [
-        ...s.actuals.map((p) => ({ x: p.ts, y: p.temp_c })),
-        ...s.forecast.map((p) => ({ x: p.ts, y: p.temp_c })),
+        ...actuals.map((p) => ({ x: p.ts, y: p.temp_c })),
+        ...fc.map((p) => ({ x: p.ts, y: p.temp_c })),
       ];
 
+      const common = {
+        type: "line",
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: { mode: "index", intersect: false },
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { type: "time", time: { tooltipFormat: "dd MMM HH:mm" }, ticks: { maxTicksLimit: 10, color: "#A29B90" }, grid: { color: "rgba(23,20,15,0.06)" } },
+            y: { ticks: { color: "#A29B90" }, grid: { color: "rgba(23,20,15,0.06)" } },
+          },
+        },
+      };
+
+      if (loadChart) loadChart.destroy();
+      loadChart = new Chart(document.getElementById("load-chart"), {
+        ...common,
+        data: {
+          datasets: [
+            { label: "p90", data: p90, borderWidth: 0, pointRadius: 0, fill: "+1", backgroundColor: "rgba(47,111,237,0.16)", tension: 0.25 },
+            { label: "p10", data: p10, borderWidth: 0, pointRadius: 0, fill: false, tension: 0.25 },
+            { label: s.winner_label || "Forecast", data: p50, borderColor: "#2F6FED", borderWidth: 2, pointRadius: 0, tension: 0.25 },
+            { label: "Actual", data: actual, borderColor: "#17140F", borderWidth: 2, pointRadius: 0, tension: 0.15 },
+          ],
+        },
+      });
+      if (wxChart) wxChart.destroy();
+      wxChart = new Chart(document.getElementById("wx-chart"), {
+        ...common,
+        data: {
+          datasets: [{ label: "Temp", data: temps, borderColor: "#C45C26", borderWidth: 2, pointRadius: 0, tension: 0.25 }],
+        },
+      });
+
+      const body = document.querySelector("#site-metrics tbody");
+      body.innerHTML = "";
+      const mets = s.metrics || {};
+      ORDER.forEach((key) => {
+        const m = mets[key];
+        if (!m) return;
+        const tr = document.createElement("tr");
+        if (key === s.winner) tr.className = "winner";
+        tr.innerHTML = `<td>${LABELS[key] || key}</td>
+          <td>${fmt3(m.mae)}</td><td>${fmt3(m.rmse)}</td><td>${fmt1(m.wmape)}</td>
+          <td>${fmtInt(m.train_hours)}</td><td>${fmtInt(m.test_calendar_hours)}</td>
+          <td>${fmtInt(m.n_test_origins)}</td><td>${fmtInt(m.scored_hours || m.n_hours)}</td>`;
+        body.appendChild(tr);
+      });
+    }
+
+    function renderVerify() {
+      const body = document.querySelector("#verify-table tbody");
+      body.innerHTML = "";
+      Object.values(DATA.sites || {}).forEach((s) => {
+        ORDER.forEach((key) => {
+          const m = (s.metrics || {})[key];
+          if (!m) return;
+          const tr = document.createElement("tr");
+          if (key === s.winner) tr.className = "winner";
+          tr.innerHTML = `<td>${s.label}</td><td>${LABELS[key] || key}</td>
+            <td>${fmt3(m.mae)}</td><td>${fmt3(m.rmse)}</td><td>${fmt1(m.wmape)}</td>
+            <td>${fmtInt(m.train_hours)}</td><td>${fmtInt(m.test_calendar_hours)}</td>
+            <td>${fmtInt(m.n_test_origins)}</td>`;
+          body.appendChild(tr);
+        });
+      });
+
+      const sweep = DATA.sweep || [];
+      const grouped = {};
+      sweep.forEach((r) => {
+        const k = `${r.site}|${r.test_days}`;
+        grouped[k] = grouped[k] || { ...r, gbm_mae: null, gbm_rmse: null, y_mae: null, w_mae: null };
+        if (r.model === "gbm") { grouped[k].gbm_mae = r.mae; grouped[k].gbm_rmse = r.rmse; }
+        if (r.model === "yesterday") grouped[k].y_mae = r.mae;
+        if (r.model === "last_week") grouped[k].w_mae = r.mae;
+      });
+      const sb = document.querySelector("#sweep-table tbody");
+      sb.innerHTML = "";
+      Object.values(grouped).forEach((r) => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td>${r.label || r.site}</td><td>${r.test_days}</td>
+          <td>${fmtInt(r.test_hours)}</td><td>${fmtInt(r.train_hours)}</td>
+          <td>${fmt3(r.gbm_mae)}</td><td>${fmt3(r.gbm_rmse)}</td>
+          <td>${fmt3(r.y_mae)}</td><td>${fmt3(r.w_mae)}</td>`;
+        sb.appendChild(tr);
+      });
+    }
+
+    function renderRealized() {
+      const summary = (DATA.realized && DATA.realized.summary) || "";
+      document.getElementById("realized-summary").textContent = summary;
+      if (DATA.realized && DATA.realized.title) {
+        document.getElementById("realized-title").textContent = DATA.realized.title;
+      }
+      const body = document.querySelector("#realized-table tbody");
+      body.innerHTML = "";
+      Object.values(DATA.sites || {}).forEach((s) => {
+        const r = s.realized || {};
+        if (!r.mae && r.mae !== 0) return;
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td>${s.label}</td><td>${r.issued_label || "—"}</td><td>${fmtInt(r.hours)}</td>
+          <td>${fmt3(r.mae)}</td><td>${fmt3(r.bias)}</td><td>${fmt3(r.rmse)}</td>
+          <td>${fmt3(r.band_kw)}</td><td>${r.coverage != null ? (r.coverage * 100).toFixed(0) + "%" : "—"}</td>
+          <td>${fmt3(r.quoted_mae)}</td><td>${fmt1(r.quoted_wmape)}</td>`;
+        body.appendChild(tr);
+      });
+      renderRealizedSite(realizedSel.value);
+    }
+
+    function renderRealizedSite(id) {
+      const s = DATA.sites[id];
+      const r = (s && s.realized) || {};
+      const rows = r.rows || [];
+      document.getElementById("rz-mae").innerHTML = `${fmt3(r.mae)} <span class="u">kW</span>`;
+      document.getElementById("rz-bias").innerHTML = `${fmt3(r.bias)} <span class="u">kW</span>`;
+      document.getElementById("rz-band").innerHTML = `${fmt3(r.band_kw)} <span class="u">kW</span>`;
+      document.getElementById("rz-cov").innerHTML = `${r.coverage != null ? (r.coverage * 100).toFixed(0) : "—"} <span class="u">%</span>`;
+      document.getElementById("realized-legend").textContent =
+        `${s ? s.label : ""} · issued ${r.issued_label || "p50"} band vs meter load · ${r.hours || 0} h from ${DATA.realized && DATA.realized.issue_origin ? fmtTime(DATA.realized.issue_origin) : "the last issue"}`;
       const common = {
         type: "line",
         options: {
@@ -190,59 +439,24 @@
           },
         },
       };
-
-      if (loadChart) loadChart.destroy();
-      loadChart = new Chart(document.getElementById("load-chart"), {
+      if (realizedChart) realizedChart.destroy();
+      realizedChart = new Chart(document.getElementById("realized-chart"), {
         ...common,
         data: {
           datasets: [
-            { label: "p90", data: p90, borderWidth: 0, pointRadius: 0, fill: "+1", backgroundColor: "rgba(47,111,237,0.16)", tension: 0.25 },
-            { label: "p10", data: p10, borderWidth: 0, pointRadius: 0, fill: false, tension: 0.25 },
-            { label: "TiDE", data: p50, borderColor: "#2F6FED", borderWidth: 2, pointRadius: 0, tension: 0.25 },
-            { label: "Actual", data: actual, borderColor: "#17140F", borderWidth: 2, pointRadius: 0, tension: 0.15 },
+            { label: "p90", data: rows.map((p) => ({ x: p.ts, y: p.p90 })), borderWidth: 0, pointRadius: 0, fill: "+1", backgroundColor: "rgba(47,111,237,0.16)" },
+            { label: "p10", data: rows.map((p) => ({ x: p.ts, y: p.p10 })), borderWidth: 0, pointRadius: 0, fill: false },
+            { label: "Issued p50", data: rows.map((p) => ({ x: p.ts, y: p.p50 })), borderColor: "#2F6FED", borderWidth: 2, pointRadius: 0 },
+            { label: "Actual", data: rows.map((p) => ({ x: p.ts, y: p.actual_kw != null ? p.actual_kw : p.battery_kw })), borderColor: "#17140F", borderWidth: 2, pointRadius: 0 },
           ],
-        },
-      });
-      if (wxChart) wxChart.destroy();
-      wxChart = new Chart(document.getElementById("wx-chart"), {
-        ...common,
-        data: {
-          datasets: [{ label: "Temp", data: temps, borderColor: "#C45C26", borderWidth: 2, pointRadius: 0, tension: 0.25 }],
-        },
-      });
-    }
-
-    function renderVerify() {
-      const v = DATA.verify || {};
-      const body = document.querySelector("#verify-table tbody");
-      body.innerHTML = "";
-      [["TiDE", v.tide], ["GBM quantile", v.gbm], ["Weekly naive", v.seasonal_naive], ["Calibrated naive", v.calibrated_naive]].forEach(([name, m]) => {
-        if (!m) return;
-        const tr = document.createElement("tr");
-        tr.innerHTML = `<td>${name}</td><td>${m.wmape?.toFixed(1) ?? "—"}</td><td>${m.mape?.toFixed(1) ?? "—"}</td><td>${m.mae?.toFixed(3) ?? "—"}</td><td>${m.coverage_p10_p90 != null ? (m.coverage_p10_p90 * 100).toFixed(0) + "%" : "—"}</td>`;
-        body.appendChild(tr);
-      });
-      const leads = v.tide?.lead || [];
-      if (leadChart) leadChart.destroy();
-      leadChart = new Chart(document.getElementById("lead-chart"), {
-        type: "line",
-        data: {
-          labels: leads.map((r) => r.lead_h),
-          datasets: [{ label: "MAPE %", data: leads.map((r) => r.mape), borderColor: "#2F6FED", borderWidth: 2, pointRadius: 0, tension: 0.2 }],
-        },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          plugins: { legend: { display: false } },
-          scales: {
-            x: { title: { display: true, text: "Lead (h)" }, ticks: { color: "#A29B90" }, grid: { color: "rgba(23,20,15,0.06)" } },
-            y: { title: { display: true, text: "MAPE %" }, ticks: { color: "#A29B90" }, grid: { color: "rgba(23,20,15,0.06)" } },
-          },
         },
       });
     }
 
     siteSel.addEventListener("change", () => renderSite(siteSel.value));
+    realizedSel.addEventListener("change", () => renderRealizedSite(realizedSel.value));
+    hzSel.addEventListener("change", () => renderSite(siteSel.value));
+    lbSel.addEventListener("change", () => renderSite(siteSel.value));
     if (siteSel.value) renderSite(siteSel.value);
     renderVerify();
   </script>

@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from config import DATA_DIR, HORIZON, OUTPUT_DIR, SITES
+from config import DATA_DIR, HORIZON, OUTPUT_DIR, OUTPUT_NAMES, SITES
 from dataset import from_model, last_origin_window, load_panel, make_windows
 from evaluate import _load_models
 from train import predict_tide
@@ -30,20 +30,25 @@ def issue(site_id: str, panel_path: Path | None = None) -> dict:
             "x_fut": w["x_fut"][None],
             "site": np.array([0]),
             "y_fut": np.zeros((1, HORIZON), np.float32),
+            "profile_fut": np.asarray(w["profile_fut"][None], np.float32),
+            "profile_now": np.asarray([w["profile_now"]], np.float32),
         },
     )[0]
     q = from_model(pred, norms[site_id])
-    return {
+    issued = {
         "site_id": site_id,
         "origin": str(w["origin"]),
+        "model": f"{site_id}-tide-n100",
         "unit": "kW",
-        "p10": q[:, 0].tolist(),
-        "p50": q[:, 1].tolist(),
-        "p90": q[:, 2].tolist(),
+        "series": "load_kw",
+        "horizon_h": HORIZON,
         "timestamps": [str(t) for t in w["future_ts"]],
         "go_live": False,
         "verdict": "FAIL",
     }
+    for name, col in zip(OUTPUT_NAMES, range(q.shape[1])):
+        issued[name] = q[:, col].tolist()
+    return issued
 
 
 if __name__ == "__main__":

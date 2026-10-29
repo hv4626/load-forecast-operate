@@ -1,25 +1,47 @@
 # Model card — rooftop load TiDE
 
 **Go-live verdict: FAIL.** Do not use this checkpoint for dispatch, bidding, or
-battery control. It can run as a research / Operate-style viewer.
+battery control. It can run as a research / Operate-style viewer. The issued
+desk is still the GBM / yesterday-copy path.
 
-Evaluated 12 Oct 2026 on a 14-day holdout (456 hourly origins × 48 h).
+Evaluated 29 Oct 2026 on the trailing 14-day holdout (575 origins × 48 h)
+of `data/hourly_panel.csv`. Last actual in that panel is 29 Oct 2026 14:00 IST.
 
 ## What the model is
 
-Per-site TiDE (Das et al. 2023): 168 h lookback, 48 h horizon, pinball p10/p50/p90.
-p50 at the issue hour is locked to the last actual (similar-day profile + origin
-decay). Weather covariates from Open-Meteo (city proxy, not the rooftop).
+Per-site TiDE (Das et al. 2023), hidden width 100. 168 h lookback, 48 h horizon.
+The level is each meter's own hour-of-day curve from `Battery_Data.xlsx`
+column `load_p_load_total` (watts, stored as kW), fit only on hours before
+the validation cut (8 Oct 2026 14:00 IST). Weekday and weekend curves are used
+when that hour has at least 8 train samples. A level error versus the origin
+hour fades with lead (τ = 6 h). Lead 0 of value is the last actual.
 
-Checkpoint: `outputs/tide.pt`
+On that train cut, KA-1608 peaks at 20:00 (0.68 kW) and TL-2362 at 12:00
+(4.09 kW). The full battery file, through 29 Oct 14:00, peaks at 19:00
+(0.71 kW) and 12:00 (4.38 kW). Those are house-load shapes, not `battery_p_batt`.
+
+The head matches the Operate contract observed on NYISO ZONF: a point `value`
+plus p01, p05, p25, p75, p95, p99, with value forced inside p25–p75. Covariates
+are city Open-Meteo temperature, GHI, wind speed, and relative humidity, plus
+hour/weekday/day-of-year Fourier, weekend, holiday, and the raw profile `india_kw`.
+This is not Pravāh's trained `tide-hpo1.1.n100` weights.
+
+Checkpoint: `outputs/tide.pt`. The weekly-copy Operate head from earlier the
+same day is `outputs/tide_operate_weekly.pt`. The p10/p50/p90 head is
+`outputs/tide_p10p50p90.pt`.
 
 ## Holdout (14 days)
 
-| Site | TiDE wMAPE | Weekly naive wMAPE | Skill vs naive | p10–p90 coverage | Origin jump p90 |
+| Site | TiDE wMAPE | Weekly naive wMAPE | Skill vs naive | p05–p95 coverage | Origin jump p90 |
 |---|---|---|---|---|---|
-| KA-1608 | 31.5% | 31.6% | +0.4% | **0.79** | **0.00** |
-| TL-2362 | 59.0% | 59.9% | +1.5% | 0.57 | **0.00** |
-| Combined | 56.9% | 57.8% | +1.5% | 0.65 | 0.00 |
+| KA-1608 | 23.4% | 41.1% | +43.0% | 0.989 | **0.00** |
+| TL-2362 | 54.8% | 73.7% | +25.6% | **0.87** | **0.00** |
+| Combined | 50.6% | 69.4% | +27.0% | **0.93** | 0.00 |
+
+Combined p25–p75 coverage is 0.68 (nominal 0.50). Combined p01–p99 coverage is
+1.00. Quantile crossings are 0. KA's p05–p95 band covers 0.989, wider than the
+0.98 cap. TL peak MAE is 1.13 kW against a weekly-naive peak MAE of 0.26 kW.
+KA peak MAE is 0.19 kW against 0.33 kW.
 
 MAPE is not used for go-live. Overnight residential load sits near 0.2 kW and
 blows MAPE up. wMAPE / MAE / peak MAE are the production scores.
@@ -28,23 +50,24 @@ blows MAPE up. wMAPE / MAE / peak MAE are the production scores.
 
 | Gate | Result |
 |---|---|
-| Beat weekly naive by >5% relative | FAIL (1.5%) |
-| KA advisory wMAPE < 20% | FAIL (31.5%) |
-| TL advisory wMAPE < 40% | FAIL (59.0%) |
-| TL 80% interval coverage 70–92% | FAIL (57%) |
-| TL peak MAE ≤ naive | FAIL |
+| Beat weekly naive by >5% relative | PASS (+27.0%) |
+| KA advisory wMAPE < 20% | FAIL (23.4%) |
+| TL advisory wMAPE < 40% | FAIL (54.8%) |
+| p05–p95 coverage 80–98% | FAIL on KA (0.989); TL 0.87 passes |
+| TL peak MAE ≤ naive | FAIL (1.13 vs 0.26 kW) |
 | Origin continuity | PASS |
 | Quantile monotonicity | PASS |
-| KA coverage | PASS |
+| KA peak MAE ≤ naive | PASS (0.19 vs 0.33 kW) |
 
 ## Why it fails production
 
-1. **Almost no skill over last-week similar-day.** An MLP that copies last week
-   and locks hour 0 is what this checkpoint is. Weather residual does not pay
-   for itself on 4–6 months of two houses.
-2. **TL-2362 is occupancy / appliance dominated.** Load jumps 0.2 kW → 7 kW
-   inside an afternoon. Temperature at Hyderabad cannot see a geyser or AC
-   switching. Interval coverage 57% means the band is not decision-grade.
+1. **KA's 90% band is too wide.** p05–p95 covers 98.9% of holdout hours. The
+   gate cap is 98%. The curve improved the point forecast; it did not tighten
+   the band.
+2. **TL-2362 is occupancy / appliance dominated.** The midday climatology is
+   real (train peak 4.09 kW at 12:00), and average wMAPE moved from 58.2% to
+   54.8%. Spikes still move by hours. Peak MAE is 1.13 kW against a weekly
+   naive of 0.26 kW. Hyderabad temperature cannot see a geyser or AC switching.
 3. **City weather, not site weather.** Bengaluru / Hyderabad Open-Meteo, not
    the meter coordinates.
 4. **Single holdout window** (last 14 days). No rolling-origin across seasons.

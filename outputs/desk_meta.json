@@ -1,0 +1,20 @@
+{
+  "product": "System Load Forecast",
+  "model": "gbm-direct / yesterday-copy",
+  "series_label": "actual",
+  "chart_title": "Demand",
+  "target": "load_kw",
+  "verdict": "FAIL",
+  "go_live": false,
+  "include_tide": false,
+  "winners": {
+    "RSSETL2362": "yesterday",
+    "RSSEKA1608": "gbm"
+  },
+  "note": "Operate is house load in kW from Downloads/Battery_Data.xlsx, column load_p_load_total. The Realized tab scores the 12 Oct issue against the meter hours after that forecast. Weather is Open-Meteo at the city. Do not dispatch from this desk.",
+  "dump": "/Users/harshvardhan/Downloads/Battery_Data.xlsx",
+  "bursts": {
+    "RSSETL2362": 1.2990464237778419,
+    "RSSEKA1608": 0.5214965338748844
+  }
+}

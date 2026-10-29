@@ -7,7 +7,8 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-from config import COVARIATES, HORIZON, LOOKBACK, SITES, TEST_DAYS, VAL_DAYS
+from config import COVARIATES, HOLIDAYS, HORIZON, LOOKBACK, SITES, TEST_DAYS, VAL_DAYS
+from consumption import attach_clock, fit_profiles, lookup_kw
 
 COVS = list(COVARIATES)
 
@@ -65,18 +66,24 @@ def make_windows(
     split: str,
 ) -> tuple[dict[str, np.ndarray], dict[str, SiteNorm]]:
     """split in {train, val, test}. Test windows have fully observed horizons."""
-    covs = [c for c in COVS if c in panel.columns]
     idx = site_index_map()
+    frames = {site_id: _site_frame(panel, site_id) for site_id in SITES}
+    cutoffs = {site_id: split_times(frames[site_id])[0] for site_id in SITES}
+    profiles = fit_profiles(cutoffs)
     y_hist, y_fut, x_hist, x_fut, site, stamp = [], [], [], [], [], []
+    profile_fut, profile_now = [], []
     norms: dict[str, SiteNorm] = {}
+    covs: list[str] = []
 
     for site_id in SITES:
-        df = _site_frame(panel, site_id)
+        df = attach_clock(frames[site_id], profiles[site_id], HOLIDAYS)
         val_start, test_start = split_times(df)
         norms[site_id] = fit_norm(df, val_start)
         nrm = norms[site_id]
+        covs = [c for c in COVS if c in df.columns]
         y = df["load_kw"].to_numpy(dtype=np.float32)
         x = df[covs].to_numpy(dtype=np.float32)
+        india = lookup_kw(profiles[site_id], df["ts"])
         # Fill remaining covariate holes with column medians from train.
         train_mask = df["ts"] < val_start
         med = np.nanmedian(x[train_mask.to_numpy()], axis=0)
@@ -107,26 +114,34 @@ def make_windows(
             x_fut.append(x[t : t + HORIZON])
             site.append(idx[site_id])
             stamp.append(str(times.iloc[t]))
+            profile_fut.append(to_model(india[t : t + HORIZON], nrm))
+            profile_now.append(to_model(np.array([india[t - 1]], np.float32), nrm)[0])
 
+    n_cov = len(covs) or 1
     arrays = {
-        "y_hist": np.stack(y_hist) if y_hist else np.zeros((0, LOOKBACK), np.float32),
-        "y_fut": np.stack(y_fut) if y_fut else np.zeros((0, HORIZON), np.float32),
-        "x_hist": np.stack(x_hist) if x_hist else np.zeros((0, LOOKBACK, len(covs)), np.float32),
-        "x_fut": np.stack(x_fut) if x_fut else np.zeros((0, HORIZON, len(covs)), np.float32),
+        "y_hist": np.stack(y_hist).astype(np.float32) if y_hist else np.zeros((0, LOOKBACK), np.float32),
+        "y_fut": np.stack(y_fut).astype(np.float32) if y_fut else np.zeros((0, HORIZON), np.float32),
+        "x_hist": np.stack(x_hist) if x_hist else np.zeros((0, LOOKBACK, n_cov), np.float32),
+        "x_fut": np.stack(x_fut) if x_fut else np.zeros((0, HORIZON, n_cov), np.float32),
         "site": np.asarray(site, np.int64),
         "origin": np.asarray(stamp),
         "covs": np.asarray(covs),
+        "profile_fut": np.stack(profile_fut).astype(np.float32) if profile_fut else np.zeros((0, HORIZON), np.float32),
+        "profile_now": np.asarray(profile_now, np.float32),
     }
     return arrays, norms
 
 
 def last_origin_window(panel: pd.DataFrame, norms: dict[str, SiteNorm]) -> dict[str, dict]:
     """One live Operate issue per site: last fully observed lookback."""
-    covs = [c for c in COVS if c in panel.columns]
     idx = site_index_map()
+    frames = {site_id: _site_frame(panel, site_id) for site_id in SITES}
+    cutoffs = {site_id: split_times(frames[site_id])[0] for site_id in SITES}
+    profiles = fit_profiles(cutoffs)
     out: dict[str, dict] = {}
     for site_id in SITES:
-        df = _site_frame(panel, site_id)
+        df = attach_clock(frames[site_id], profiles[site_id], HOLIDAYS)
+        covs = [c for c in COVS if c in df.columns]
         observed = np.flatnonzero(df["load_kw"].notna().to_numpy())
         if len(observed) == 0:
             continue
@@ -146,12 +161,15 @@ def last_origin_window(panel: pd.DataFrame, norms: dict[str, SiteNorm]) -> dict[
         for arr in (x_hist, x_fut):
             inds = np.where(np.isnan(arr))
             arr[inds] = np.take(med, inds[1])
-        y_hist = to_model(hist["load_kw"].to_numpy(np.float32), nrm)
+        y_hist = to_model(hist["load_kw"].to_numpy(np.float32), nrm).astype(np.float32)
+        india = lookup_kw(profiles[site_id], df["ts"])
         out[site_id] = {
             "y_hist": y_hist,
             "x_hist": x_hist,
             "x_fut": x_fut,
             "site": idx[site_id],
+            "profile_fut": to_model(india[last_i + 1 : last_i + 1 + HORIZON], nrm).astype(np.float32),
+            "profile_now": np.float32(to_model(np.array([india[last_i]], np.float32), nrm)[0]),
             "origin": hist["ts"].iloc[-1],
             "future_ts": fut["ts"].tolist(),
             "hist_ts": hist["ts"].tolist(),

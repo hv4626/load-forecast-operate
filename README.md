@@ -12,14 +12,27 @@ and weather on one time axis, horizon 48 h.
 
 This repo does the same for two SolarSquare rooftop meters, not an ISO.
 
-## Holdout (14 days, 456 origins)
+## Dashboard
 
-| Site | TiDE wMAPE | Weekly naive | Coverage | Origin jump |
+The issued desk is [web/index.html](web/index.html): GBM on KA-1608,
+yesterday-copy on TL-2362, verdict FAIL. GitHub Pages serves that same file
+from `docs/index.html`. Do not dispatch from it.
+
+## Research model (India hour profile)
+
+Per-site TiDE, 14-day holdout, 575 origins. The level is each meter's own
+hour-of-day curve from `load_p_load_total`, fit before the validation cut.
+Details and gates: [MODEL_CARD.md](MODEL_CARD.md). What the Operate capture
+showed, and what was copied: [docs/pravah-rea.md](docs/pravah-rea.md).
+
+| Site | TiDE wMAPE | Weekly naive | p05–p95 | Peak MAE vs naive |
 |---|---|---|---|---|
-| KA-1608 | 31.5% | 31.6% | 0.79 | 0 |
-| TL-2362 | 59.0% | 59.9% | 0.57 | 0 |
+| KA-1608 | 23.4% | 41.1% | 0.989 | 0.19 vs 0.33 kW |
+| TL-2362 | 54.8% | 73.7% | 0.87 | 1.13 vs 0.26 kW |
+| Combined | 50.6% | 69.4% | 0.93 | — |
 
-Skill over last week is ~1%. That is not production skill.
+Skill vs last week is +27%. KA's band is wider than the 98% cap, and TL's
+peak error is still worse than last week. Verdict FAIL.
 
 ## Notebook (use this on a new dump)
 
@@ -63,12 +76,15 @@ It is not in git.
 ## Layout
 
 ```
-notebooks/load_forecast.ipynb   R&D model — point DUMP at a new Excel/CSV
-src/prepare.py     5-minute meters → hourly kW + Open-Meteo
-src/model.py       TiDE, origin-locked similar-day skip, monotone quantiles
+docs/index.html        GitHub Page — the issued desk
+docs/pravah-rea.md     Operate capture: contract, weather, what was copied
+notebooks/load_forecast.ipynb   issuer — point DUMP at a new Excel/CSV
+src/consumption.py house-load hour curves from load_p_load_total
+src/model.py       TiDE, Indian hour-profile skip, Operate percentile head
 src/train.py       per-site train, baselines
 src/evaluate.py    production gates
-src/infer.py       issue a 48 h forecast
-web/               Operate / Verify UI
-outputs/tide.pt    checkpoint
+src/infer.py       issue a 48 h research forecast
+web/               source of the issued desk
+outputs/tide.pt    India-profile checkpoint
+MODEL_CARD.md      holdout numbers and the FAIL gates
 ```

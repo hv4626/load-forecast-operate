@@ -9,13 +9,12 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from config import DATA_DIR, HORIZON, LOOKBACK, OUTPUT_DIR, QUANTILES, SITES
+from config import DATA_DIR, HORIZON, LOOKBACK, OUTPUT_DIR, OUTPUT_NAMES, QUANTILES, SITES, VALUE_INDEX
 from dataset import from_model, load_panel, make_windows, site_index_map
 from model import TideQuantile
 from train import (
     _filter_site,
     _metrics,
-    apply_conformal,
     calibrated_naive,
     denorm,
     predict_tide,
@@ -33,7 +32,7 @@ def _arch_model(n_cov: int, arch: dict | None = None) -> TideQuantile:
         n_covariates=n_cov,
         n_sites=1,
         n_quantiles=len(QUANTILES),
-        hidden=arch.get("hidden", 64),
+        hidden=arch.get("hidden", 100),
         decoder_dim=arch.get("decoder_dim", 16),
         temporal_width=arch.get("temporal_width", 4),
         encoder_layers=arch.get("encoder_layers", 2),
@@ -78,35 +77,40 @@ def report() -> dict:
     train, _ = make_windows(panel, "train")
     n_cov = test["x_hist"].shape[-1]
     models, blob = _load_models(OUTPUT_DIR / "tide.pt", n_cov)
-    pred = np.zeros((len(test["y_hist"]), HORIZON, 3), np.float32)
+    n_out = len(OUTPUT_NAMES)
+    pred = np.zeros((len(test["y_hist"]), HORIZON, n_out), np.float32)
     for i, sid in enumerate(SITES):
         mask = test["site"] == i
         if not mask.any() or sid not in models:
             continue
         pred[mask] = predict_tide(models[sid], _filter_site(test, i))
+    bands = {
+        name: denorm(pred[:, :, i], test["site"], norms)
+        for i, name in enumerate(OUTPUT_NAMES)
+    }
     y_true = denorm(test["y_fut"], test["site"], norms)
-    y_p10 = denorm(pred[:, :, 0], test["site"], norms)
-    y_p50 = denorm(pred[:, :, 1], test["site"], norms)
-    y_p90 = denorm(pred[:, :, 2], test["site"], norms)
-    for i, sid in enumerate(SITES):
-        cfg = (blob.get("conformal") or {}).get(sid)
-        if not cfg:
-            continue
-        mask = test["site"] == i
-        y_p10[mask], y_p90[mask] = apply_conformal(
-            y_p50[mask], np.asarray(cfg["lo"]), np.asarray(cfg["hi"])
-        )
+    y_hat = bands["value"]
+    ordered = [bands[name] for name in OUTPUT_NAMES]
+    crossings = np.zeros(y_hat.shape, dtype=bool)
+    for left, right in zip(ordered, ordered[1:]):
+        crossings |= left > right + 1e-5
     y_naive = seasonal_naive(test, norms)
     y_cal = calibrated_naive(test, norms)
     last_obs = denorm(test["y_hist"][:, -1:], test["site"], norms)[:, 0]
 
+    def _cover(lo: np.ndarray, hi: np.ndarray, yt: np.ndarray | None = None) -> float:
+        actual = y_true if yt is None else yt
+        return float(np.mean((actual >= lo) & (actual <= hi)))
+
     out: dict = {"n_windows": int(len(y_true)), "horizon": HORIZON}
     out["overall"] = {
-        "tide": _metrics(y_true, y_p50),
+        "tide": _metrics(y_true, y_hat),
         "naive": _metrics(y_true, y_naive),
         "calibrated_naive": _metrics(y_true, y_cal),
-        "coverage_p10_p90": float(np.mean((y_true >= y_p10) & (y_true <= y_p90))),
-        "quantile_crossings": float(np.mean((y_p10 > y_p50) | (y_p50 > y_p90))),
+        "coverage_p25_p75": _cover(bands["p25"], bands["p75"]),
+        "coverage_p05_p95": _cover(bands["p05"], bands["p95"]),
+        "coverage_p01_p99": _cover(bands["p01"], bands["p99"]),
+        "quantile_crossings": float(np.mean(crossings)),
     }
     skill = 1.0 - out["overall"]["tide"]["wmape"] / max(out["overall"]["naive"]["wmape"], 1e-6)
     out["overall"]["skill_vs_naive"] = float(skill)
@@ -117,8 +121,8 @@ def report() -> dict:
         m = test["site"] == i
         if not m.any():
             continue
-        yt, yp, yn = y_true[m], y_p50[m], y_naive[m]
-        p10, p90 = y_p10[m], y_p90[m]
+        yt, yp, yn = y_true[m], y_hat[m], y_naive[m]
+        p05, p95 = bands["p05"][m], bands["p95"][m]
         last = last_obs[m]
         jump = yp[:, 0] - last
         rel_jump = jump / np.clip(last, 0.05, None)
@@ -158,7 +162,9 @@ def report() -> dict:
             "calibrated_naive": _metrics(yt, y_cal[m]),
             "skill_vs_naive": 1.0 - _metrics(yt, yp)["wmape"] / max(_metrics(yt, yn)["wmape"], 1e-6),
             "skill_vs_calibrated": 1.0 - _metrics(yt, yp)["wmape"] / max(_metrics(yt, y_cal[m])["wmape"], 1e-6),
-            "coverage_p10_p90": float(np.mean((yt >= p10) & (yt <= p90))),
+            "coverage_p25_p75": _cover(bands["p25"][m], bands["p75"][m], yt),
+            "coverage_p05_p95": _cover(p05, p95, yt),
+            "coverage_p01_p99": _cover(bands["p01"][m], bands["p99"][m], yt),
             "origin_jump_kw_mean": float(np.mean(jump)),
             "origin_jump_kw_mae": float(np.mean(np.abs(jump))),
             "origin_rel_jump_median": float(np.median(rel_jump)),
@@ -193,8 +199,8 @@ def report() -> dict:
         )
         gate(
             f"{sid}_coverage",
-            0.70 <= s["coverage_p10_p90"] <= 0.92,
-            f"coverage={s['coverage_p10_p90']:.2f} (80% interval target 0.70–0.92)",
+            0.80 <= s["coverage_p05_p95"] <= 0.98,
+            f"p05–p95 coverage={s['coverage_p05_p95']:.2f} (nominal 90%, accept 0.80–0.98)",
         )
         gate(
             f"{sid}_peak_vs_naive",
@@ -235,13 +241,13 @@ def main() -> None:
         f"overall tide wMAPE={out['overall']['tide']['wmape']:.1f}%  "
         f"naive={out['overall']['naive']['wmape']:.1f}%  "
         f"skill={out['overall']['skill_vs_naive']:.3f}  "
-        f"coverage={out['overall']['coverage_p10_p90']:.2f}  "
+        f"p05–p95={out['overall']['coverage_p05_p95']:.2f}  "
         f"crossings={out['overall']['quantile_crossings']:.3f}"
     )
     for sid, s in out["by_site"].items():
         print(
             f"{sid}  tide={s['tide']['wmape']:.1f}%  naive={s['naive']['wmape']:.1f}%  "
-            f"skill={s['skill_vs_naive']:.3f}  cov={s['coverage_p10_p90']:.2f}  "
+            f"skill={s['skill_vs_naive']:.3f}  p05–p95={s['coverage_p05_p95']:.2f}  "
             f"origin |Δ| p90={s['origin_rel_jump_p90']:.2f}  peakMAE={s['peak_mae']:.3f}"
         )
         # worst hours

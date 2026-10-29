@@ -40,7 +40,7 @@ from pathlib import Path
 DUMP = Path.home() / "Downloads" / "Load_data_lifetime_daily_RSSEKA1608_RSSETL2362 (1).xlsx"
 # DUMP = Path("/path/to/another_site.xlsx")  # or .csv
 
-HORIZON = 48          # hours ahead
+HORIZON = 48          # hours ahead (change this, then Run All — the model retrains)
 LOOKBACK_DAYS = 7     # need at least this much history
 HOLDOUT_DAYS = 14     # trailing days used only for scoring
 VAL_DAYS = 7          # used to pick GBM vs yesterday vs last-week
@@ -405,9 +405,10 @@ cells.append(code("""def train_site(sid, y):
         ))
         Y = test["Y"]
         pred = {"yesterday": test["yesterday"][0], "last_week": test["last_week"][0], "gbm": test["gbm"][0]}[winner]
+        mid = max(HORIZON // 2, 1)
         print(f"  winner={winner}  holdout wMAPE={wmape(Y, pred):.1f}%  "
-              f"h1-24={wmape(Y[:, :24], pred[:, :24]):.1f}%  "
-              f"h25-48={wmape(Y[:, 24:], pred[:, 24:]):.1f}%  "
+              f"h1-{mid}={wmape(Y[:, :mid], pred[:, :mid]):.1f}%  "
+              f"h{mid+1}-{HORIZON}={wmape(Y[:, mid:], pred[:, mid:]):.1f}%  "
               f"peakMAE={mae(Y.max(1), pred.max(1)):.3f}")
     return {
         "sid": sid, "y": y, "temp": temp, "ghi": ghi,
@@ -484,7 +485,7 @@ for sid, fit in fits.items():
         band_lo[0], band_hi[0] = min(band_lo[0], last), max(band_hi[0], last)
     idx = pd.date_range(origin, periods=HORIZON, freq="h")
     live[sid] = pd.DataFrame({"p10": band_lo, "p50": issued, "p90": band_hi}, index=idx)
-    hist = y.iloc[-48:]
+    hist = y.iloc[-max(HORIZON, 24):]
     fig, ax = plt.subplots()
     ax.plot(hist.index, hist.values, color="#17140F", lw=2, label="actual")
     ax.plot(idx, issued, color="#2F6FED", lw=2, label=f\"forecast ({fit['winner']})\")

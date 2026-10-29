@@ -13,9 +13,9 @@ import torch
 from sklearn.ensemble import HistGradientBoostingRegressor
 from torch.utils.data import DataLoader, TensorDataset
 
-from config import HORIZON, LOOKBACK, OUTPUT_DIR, QUANTILES, SITES
+from config import HIDDEN, HORIZON, LOOKBACK, OUTPUT_DIR, OUTPUT_NAMES, QUANTILES, SITES, VALUE_INDEX
 from dataset import from_model, gbm_matrix, last_origin_window, load_panel, make_windows
-from model import TideQuantile, pinball_loss
+from model import TideQuantile, operate_loss
 
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 DEVICE = torch.device("cpu")
@@ -23,11 +23,13 @@ DEVICE = torch.device("cpu")
 
 def _tensors(arr: dict) -> TensorDataset:
     return TensorDataset(
-        torch.from_numpy(arr["y_hist"]),
-        torch.from_numpy(arr["x_hist"]),
-        torch.from_numpy(arr["x_fut"]),
-        torch.from_numpy(arr["y_fut"]),
-        torch.from_numpy(arr["site"]),
+        torch.from_numpy(np.asarray(arr["y_hist"], np.float32)),
+        torch.from_numpy(np.asarray(arr["x_hist"], np.float32)),
+        torch.from_numpy(np.asarray(arr["x_fut"], np.float32)),
+        torch.from_numpy(np.asarray(arr["y_fut"], np.float32)),
+        torch.from_numpy(arr["site"].astype(np.int64, copy=False)),
+        torch.from_numpy(np.asarray(arr["profile_fut"], np.float32)),
+        torch.from_numpy(np.asarray(arr["profile_now"], np.float32)),
     )
 
 
@@ -75,7 +77,7 @@ def train_tide(train, val, n_cov: int, epochs: int = 100) -> TideQuantile:
         n_covariates=n_cov,
         n_sites=1,
         n_quantiles=len(QUANTILES),
-        hidden=64,
+        hidden=HIDDEN,
         decoder_dim=16,
         temporal_width=4,
         encoder_layers=2,
@@ -90,9 +92,9 @@ def train_tide(train, val, n_cov: int, epochs: int = 100) -> TideQuantile:
     for epoch in range(1, epochs + 1):
         model.train()
         losses = []
-        for y_h, x_h, x_f, y_f, site in loader:
-            pred = model(y_h, x_h, x_f, site)
-            loss = pinball_loss(pred, y_f, QUANTILES)
+        for y_h, x_h, x_f, y_f, site, prof_f, prof_now in loader:
+            pred = model(y_h, x_h, x_f, site, prof_f, prof_now)
+            loss = operate_loss(pred, y_f)
             opt.zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -100,8 +102,8 @@ def train_tide(train, val, n_cov: int, epochs: int = 100) -> TideQuantile:
             losses.append(float(loss.item()))
         model.eval()
         with torch.no_grad():
-            y_h, x_h, x_f, y_f, site = val_set.tensors
-            vloss = float(pinball_loss(model(y_h, x_h, x_f, site), y_f, QUANTILES).item())
+            y_h, x_h, x_f, y_f, site, prof_f, prof_now = val_set.tensors
+            vloss = float(operate_loss(model(y_h, x_h, x_f, site, prof_f, prof_now), y_f).item())
         if vloss < best_val - 1e-4:
             best_val = vloss
             best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
@@ -126,8 +128,8 @@ def predict_tide(model: TideQuantile, arr: dict) -> np.ndarray:
     model.eval()
     ds = _tensors(arr)
     with torch.no_grad():
-        y_h, x_h, x_f, _, site = ds.tensors
-        pred = model(y_h, x_h, x_f, site).cpu().numpy()
+        y_h, x_h, x_f, _, site, prof_f, prof_now = ds.tensors
+        pred = model(y_h, x_h, x_f, site, prof_f, prof_now).cpu().numpy()
     return pred
 
 
@@ -135,7 +137,8 @@ def train_gbm(train, val) -> list[HistGradientBoostingRegressor]:
     X_tr, y_tr = gbm_matrix(train)
     X_va, y_va = gbm_matrix(val)
     models = []
-    for q in QUANTILES:
+    # Same channel order as TideQuantile, with a median model in the value slot.
+    for q in (0.01, 0.05, 0.25, 0.50, 0.75, 0.95, 0.99):
         print(f"  GBM q={q} …", flush=True)
         est = HistGradientBoostingRegressor(
             loss="quantile",
@@ -246,13 +249,15 @@ def run(panel_path: Path) -> dict:
             "states": states,
             "n_cov": n_cov,
             "arch": {
-                "hidden": 64,
+                "hidden": HIDDEN,
                 "decoder_dim": 16,
                 "temporal_width": 4,
                 "encoder_layers": 2,
                 "decoder_layers": 2,
                 "dropout": 0.2,
             },
+            "baseline": "india_hour_profile",
+            "output_names": list(OUTPUT_NAMES),
             "norms": {k: {"mean": v.mean, "std": v.std} for k, v in norms.items()},
             "conformal": {},
         },
@@ -264,58 +269,42 @@ def run(panel_path: Path) -> dict:
 
     def pack(name, pred_norm, arr):
         y_true = denorm(arr["y_fut"], arr["site"], norms)
-        y_hat = denorm(pred_norm[:, :, 1], arr["site"], norms)  # median
-        p10 = denorm(pred_norm[:, :, 0], arr["site"], norms)
-        p90 = denorm(pred_norm[:, :, 2], arr["site"], norms)
+        y_hat = denorm(pred_norm[:, :, VALUE_INDEX], arr["site"], norms)
+        p05 = denorm(pred_norm[:, :, 1], arr["site"], norms)
+        p95 = denorm(pred_norm[:, :, 5], arr["site"], norms)
         m = _metrics(y_true, y_hat)
         m["lead"] = _lead_table(y_true, y_hat)
-        m["coverage_p10_p90"] = float(np.mean((y_true >= p10) & (y_true <= p90)))
+        m["coverage_p05_p95"] = float(np.mean((y_true >= p05) & (y_true <= p95)))
         print(
             f"  {name} wMAPE={m['wmape']:.1f}% MAPE={m['mape']:.1f}% "
-            f"MAE={m['mae']:.3f} kW cov={m['coverage_p10_p90']:.2f}",
+            f"MAE={m['mae']:.3f} kW p05–p95={m['coverage_p05_p95']:.2f}",
             flush=True,
         )
-        return m, y_true, y_hat, p10, p90
+        return m, y_true, y_hat
 
-    tide_test = np.zeros((len(test["y_hist"]), HORIZON, 3), np.float32)
-    conformal: dict[str, dict] = {}
+    n_out = len(OUTPUT_NAMES)
+    tide_test = np.zeros((len(test["y_hist"]), HORIZON, n_out), np.float32)
     for i, sid in enumerate(SITES):
         if sid not in models:
             continue
-        va = _filter_site(val, i)
         te = _filter_site(test, i)
         mask = test["site"] == i
         if not mask.any():
             continue
         tide_test[mask] = predict_tide(models[sid], te)
-        nrm = norms[sid]
-        if len(va["y_hist"]) >= 16:
-            vp = predict_tide(models[sid], va)
-            yv = from_model(va["y_fut"], nrm)
-            pv = from_model(vp[:, :, 1], nrm)
-            lo, hi = fit_conformal(yv, pv)
-        else:
-            lo = np.zeros(HORIZON, np.float32)
-            hi = np.zeros(HORIZON, np.float32)
-        conformal[sid] = {"lo": lo.tolist(), "hi": hi.tolist()}
-    blob = torch.load(ckpt, map_location="cpu", weights_only=False)
-    blob["conformal"] = conformal
-    torch.save(blob, ckpt)
     gbm_test = predict_gbm(gbm, test)
     naive = seasonal_naive(test, norms)
     cal_naive = calibrated_naive(test, norms)
 
-    report = {"quantiles": list(QUANTILES), "lookback": LOOKBACK, "horizon": HORIZON}
-    report["tide"], y_true, y_tide, p10, p90 = pack("tide", tide_test, test)
-    for i, sid in enumerate(SITES):
-        if sid not in conformal:
-            continue
-        mask = test["site"] == i
-        lo = np.asarray(conformal[sid]["lo"])
-        hi = np.asarray(conformal[sid]["hi"])
-        p10[mask], p90[mask] = apply_conformal(y_tide[mask], lo, hi)
-    report["tide"]["coverage_p10_p90"] = float(np.mean((y_true >= p10) & (y_true <= p90)))
-    print(f"  tide conformal coverage={report['tide']['coverage_p10_p90']:.2f}", flush=True)
+    report = {
+        "quantiles": list(QUANTILES),
+        "output_names": list(OUTPUT_NAMES),
+        "lookback": LOOKBACK,
+        "horizon": HORIZON,
+        "hidden": HIDDEN,
+        "weather": ["temperature_2m", "shortwave_radiation", "wind_speed_10m", "relative_humidity_2m"],
+    }
+    report["tide"], y_true, y_tide = pack("tide", tide_test, test)
     report["gbm"], *_ = pack("gbm", gbm_test, test)
     report["seasonal_naive"] = _metrics(y_true, naive)
     report["calibrated_naive"] = _metrics(y_true, cal_naive)
@@ -347,28 +336,26 @@ def run(panel_path: Path) -> dict:
         model.eval()
         with torch.no_grad():
             pred = model(
-                torch.from_numpy(w["y_hist"][None]),
-                torch.from_numpy(w["x_hist"][None]),
-                torch.from_numpy(w["x_fut"][None]),
+                torch.from_numpy(np.asarray(w["y_hist"][None], np.float32)),
+                torch.from_numpy(np.asarray(w["x_hist"][None], np.float32)),
+                torch.from_numpy(np.asarray(w["x_fut"][None], np.float32)),
                 torch.tensor([0]),
+                torch.from_numpy(np.asarray(w["profile_fut"][None], np.float32)),
+                torch.from_numpy(np.asarray([w["profile_now"]], np.float32)),
             )[0].numpy()
         nrm = norms[sid]
         q = from_model(pred, nrm)
-        if sid in conformal:
-            lo = np.asarray(conformal[sid]["lo"])
-            hi = np.asarray(conformal[sid]["hi"])
-            q[:, 0], q[:, 2] = apply_conformal(q[:, 1], lo, hi)
-        live_out[sid] = {
+        issued = {
             "origin": str(w["origin"]),
             "future_ts": [str(t) for t in w["future_ts"]],
-            "hist_ts": [str(t) for t in w["hist_ts"][-48:]],
-            "hist_load_kw": w["hist_load"][-48:].tolist(),
-            "hist_temp_c": w["hist_temp"][-48:].tolist(),
+            "hist_ts": [str(t) for t in w["hist_ts"][-336:]],
+            "hist_load_kw": w["hist_load"][-336:].tolist(),
+            "hist_temp_c": w["hist_temp"][-336:].tolist(),
             "future_temp_c": w["future_temp"].tolist(),
-            "p10": q[:, 0].tolist(),
-            "p50": q[:, 1].tolist(),
-            "p90": q[:, 2].tolist(),
         }
+        for name, col in zip(OUTPUT_NAMES, range(q.shape[1])):
+            issued[name] = q[:, col].tolist()
+        live_out[sid] = issued
     report["live"] = live_out
     (OUTPUT_DIR / "metrics.json").write_text(json.dumps(report, indent=2))
     print(f"wrote {OUTPUT_DIR / 'metrics.json'}", flush=True)

@@ -21,7 +21,15 @@ SOURCE_XLSX = Path(
 
 LOOKBACK = 168  # 7 days of hourly history (TiDE encoder)
 HORIZON = 48  # Operate 2D horizon
-QUANTILES = (0.10, 0.50, 0.90)
+# Percentiles served by Operate (NYISO ZONF, issue 2026-10-29T16:00Z).
+# The point forecast is a separate `value`, not one of these levels.
+# On all 60 captured hours, value was inside p25–p75.
+QUANTILES = (0.01, 0.05, 0.25, 0.75, 0.95, 0.99)
+# Channel order of TideQuantile: the six percentiles with value in the middle.
+OUTPUT_NAMES = ("p01", "p05", "p25", "value", "p75", "p95", "p99")
+VALUE_INDEX = 3
+# `n100` in the published id `{region}-tide-hpo1.1.n100`.
+HIDDEN = 100
 FREQ = "h"
 TZ = "Asia/Kolkata"
 
@@ -54,17 +62,17 @@ SITES = {
     },
 }
 
-# Open-Meteo fields used as future covariates (same role as Indus/NWP in Operate).
+# Weather the Operate desk charts, in that order: temperature, GHI, wind, humidity.
+# City Open-Meteo stands in for Operate's station-average. Apparent temperature,
+# precipitation, and cloud cover are not on that desk.
 WEATHER_HOURLY = [
     "temperature_2m",
-    "relative_humidity_2m",
-    "apparent_temperature",
-    "precipitation",
     "shortwave_radiation",
     "wind_speed_10m",
-    "cloud_cover",
+    "relative_humidity_2m",
 ]
 
+# india_kw is the hour-of-week mean of load_p_load_total from Battery_Data.xlsx.
 COVARIATES = WEATHER_HOURLY + [
     "hour_sin",
     "hour_cos",
@@ -74,7 +82,10 @@ COVARIATES = WEATHER_HOURLY + [
     "doy_cos",
     "is_weekend",
     "is_holiday",
+    "india_kw",
 ]
+
+BATTERY_XLSX = Path("/Users/harshvardhan/Downloads/Battery_Data.xlsx")
 
 # Indian public holidays overlapping Apr–Oct 2026 on the meters.
 HOLIDAYS = {
