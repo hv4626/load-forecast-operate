@@ -23,10 +23,10 @@
     html, body { margin: 0; background: var(--bg); color: var(--ink); font-family: "IBM Plex Sans", sans-serif; }
     button { font-family: inherit; }
     .shell { max-width: 1280px; margin: 0 auto; min-height: 100vh; border-left: 1px solid var(--hair); border-right: 1px solid var(--hair); }
-    header { display: flex; align-items: center; justify-content: space-between; padding: 18px 28px; border-bottom: 1px solid var(--hair); }
+    header { display: flex; align-items: center; justify-content: space-between; gap: 12px 20px; flex-wrap: wrap; padding: 18px 28px; border-bottom: 1px solid var(--hair); }
     .brand { font-weight: 600; letter-spacing: -0.03em; font-size: 15px; }
     .brand span { color: var(--faint); font-weight: 400; margin-left: 10px; font-size: 12px; font-family: "IBM Plex Mono", monospace; }
-    nav { display: flex; gap: 4px; }
+    nav { display: flex; flex-wrap: wrap; gap: 4px; }
     .tab { border: 0; background: transparent; padding: 8px 12px; color: var(--muted); cursor: pointer; font-size: 13px; }
     .tab[aria-selected="true"] { color: var(--ink); box-shadow: inset 0 -2px 0 var(--ink); }
     .toolbar { display: flex; flex-wrap: wrap; gap: 12px; padding: 16px 28px; border-bottom: 1px solid var(--hair); align-items: end; }
@@ -58,10 +58,21 @@
     tr.winner td:first-child::after { content: " · issued"; color: var(--forecast); font-weight: 400; }
     .hidden { display: none; }
     .note { padding: 12px 28px 40px; color: var(--muted); font-size: 12px; line-height: 1.5; max-width: 90ch; }
+    .banner { padding: 12px 28px; border-bottom: 1px solid var(--hair); font-size: 13px; line-height: 1.45; color: var(--muted); }
+    .banner b { color: var(--accent); font-weight: 600; }
+    .table-scroll { overflow-x: auto; margin-bottom: 8px; }
+    .table-scroll table { min-width: 720px; }
+    .status-copy { max-width: 88ch; color: var(--muted); font-size: 13px; line-height: 1.55; }
+    .status-copy p { margin: 0 0 12px; }
+    .status-copy b { color: var(--ink); font-weight: 600; }
+    td.fail { color: var(--accent); }
     @media (max-width: 900px) {
+      header { align-items: flex-start; padding: 14px 16px; }
+      .banner, .toolbar, .panel, .kpi, .metrics, .note { padding-left: 16px; padding-right: 16px; }
       .grid { grid-template-columns: 1fr; }
       .panel + .panel { border-left: 0; border-top: 1px solid var(--hair); }
       .kpis { grid-template-columns: 1fr 1fr; }
+      nav { flex-basis: 100%; }
     }
   </style>
 </head>
@@ -73,8 +84,13 @@
         <button class="tab" data-mode="operate" aria-selected="true">Operate</button>
         <button class="tab" data-mode="realized">Realized</button>
         <button class="tab" data-mode="verify">Verify</button>
+        <button class="tab" data-mode="status">Status</button>
       </nav>
     </header>
+    <div class="banner">
+      The curve on this page is GBM for KA-1608 and yesterday-copy for TL-2362.
+      The research checkpoint is <b>FAIL</b>. It stays off this chart. Do not dispatch.
+    </div>
 
     <div id="operate">
       <div class="toolbar">
@@ -197,6 +213,56 @@
         </table>
       </div>
     </div>
+
+    <div id="status" class="hidden">
+      <div class="metrics">
+        <h2>Research checkpoint · 14-day holdout</h2>
+        <div class="legend">TiDE with each meter's hour-of-day profile. 575 origins, horizon 48 h. evaluate.py printed verdict FAIL on 29 Oct 2026. Bands use a scale fit on the validation week only. The point forecast is the same TiDE value. The chart on Operate is the issued desk.</div>
+        <div class="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Site</th><th>wMAPE</th><th>Weekly naive</th><th>Skill</th>
+              <th>p05–p95</th><th>Peak MAE</th><th>Naive peak</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>KA-1608</td><td class="fail">23.4%</td><td>41.1%</td><td>+43.0%</td>
+              <td>0.96</td><td>0.19 kW</td><td>0.33 kW</td>
+            </tr>
+            <tr>
+              <td>TL-2362</td><td class="fail">54.8%</td><td>73.7%</td><td>+25.6%</td>
+              <td>0.92</td><td class="fail">1.13 kW</td><td>0.26 kW</td>
+            </tr>
+            <tr>
+              <td>Combined</td><td>50.6%</td><td>69.4%</td><td>+27.0%</td>
+              <td>0.94</td><td>—</td><td>—</td>
+            </tr>
+          </tbody>
+        </table>
+        </div>
+        <p class="legend">Passed: skill versus last week, origin jump 0 on both meters, p05–p95 inside 80–98%, KA peak versus last week, and no quantile crossings. Raw coverage before the scale was 0.989 at KA and 0.87 at TL. The scales are 0.74 and 1.32.</p>
+
+        <h2>Why it fails now</h2>
+        <div class="status-copy">
+          <p><b>Hyderabad peaks move off the clock.</b> TL-2362 peak MAE is 1.13 kW. The same hour last week is 0.26 kW. Yesterday-copy is 0.52 kW, so the issued desk stays yesterday-copy. Load runs from about 0.2 kW overnight to spikes near 7 kW, and those spikes shift by hours. The noon climatology is real (train peak 4.09 kW at 12:00). City temperature does not see a geyser or an air conditioner switching.</p>
+          <p><b>The spike check lost on the holdout.</b> A two-part model estimates the chance load exceeds 2 kW, and the size of that spike, with the quiet-hour curve underneath. At the validation cutoff of 0.25 it recalls 80% of hours above 2 kW, at 60% precision. The placement that won the validation week, a spike where that probability exceeds 0.70, is 60.6% wMAPE and 1.03 kW peak MAE on the holdout. The TiDE point is 54.8% and 1.13 kW. Average error got worse, and the peak still loses to yesterday, so the point stays the TiDE.</p>
+          <p><b>Bengaluru is three points over the average-error bar.</b> KA-1608 wMAPE is 23.4% against a bar of 20%. The 90% band covers 96% of holdout hours after the validation scale. Peak MAE is 0.19 kW against last week's 0.33 kW.</p>
+          <p><b>Hyderabad average error is still high.</b> TL wMAPE is 54.8% against a bar of 40%. The band covers 92% of holdout hours after its validation scale.</p>
+          <p><b>The file is one season, and the weather is the city.</b> TL starts in April 2026, KA in June 2026, and both end 29 Oct 2026. A second summer is absent. An occupancy or clamp channel is absent. Open-Meteo is the Bengaluru and Hyderabad city points. The score is one 14-day window.</p>
+        </div>
+
+        <h2>What has to be collected</h2>
+        <div class="status-copy">
+          <p><b>The same meter series through a second summer.</b> That history has to come from the meters. It is absent from the file.</p>
+          <p><b>An occupancy or current-clamp signal on TL-2362.</b> The model keeps a column for it and reads that column only when the panel has it. The column stays empty until a sensor writes it.</p>
+          <p><b>Weather at the house.</b> The current covariates are the city stations.</p>
+          <p><b>A TL peak that beats yesterday</b> and holds the average error. Yesterday's peak MAE on this holdout is 0.52 kW. Until a scored model beats that, the issued desk stays yesterday-copy for TL-2362 and GBM for KA-1608.</p>
+          <p><b>A printed PASS, then shadow mode.</b> evaluate.py has to pass every gate that is already set: TL peak MAE at or under last week, KA wMAPE under 20%, TL wMAPE under 40%, coverage inside 80–98%, plus the skill and origin gates. After a PASS, 30 days of shadow mode against the live meter come before any control use.</p>
+        </div>
+      </div>
+    </div>
     <p class="note" id="desk-note">
       Past load is the meter. Forward hours are the issued model.
       Weather is Open-Meteo at the city, not the rooftop.
@@ -245,7 +311,7 @@
     tabs.forEach((btn) => {
       btn.addEventListener("click", () => {
         tabs.forEach((b) => b.setAttribute("aria-selected", b === btn));
-        ["operate", "verify", "realized"].forEach((id) => {
+        ["operate", "verify", "realized", "status"].forEach((id) => {
           document.getElementById(id).classList.toggle("hidden", btn.dataset.mode !== id);
         });
         if (btn.dataset.mode === "realized") renderRealized();

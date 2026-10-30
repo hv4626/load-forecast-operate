@@ -27,12 +27,14 @@ showed, and what was copied: [docs/pravah-rea.md](docs/pravah-rea.md).
 
 | Site | TiDE wMAPE | Weekly naive | p05–p95 | Peak MAE vs naive |
 |---|---|---|---|---|
-| KA-1608 | 23.4% | 41.1% | 0.989 | 0.19 vs 0.33 kW |
-| TL-2362 | 54.8% | 73.7% | 0.87 | 1.13 vs 0.26 kW |
-| Combined | 50.6% | 69.4% | 0.93 | — |
+| KA-1608 | 23.4% | 41.1% | 0.96 | 0.19 vs 0.33 kW |
+| TL-2362 | 54.8% | 73.7% | 0.92 | 1.13 vs 0.26 kW |
+| Combined | 50.6% | 69.4% | 0.94 | — |
 
-Skill vs last week is +27%. KA's band is wider than the 98% cap, and TL's
-peak error is still worse than last week. Verdict FAIL.
+Skill vs last week is +27%. Coverage is after a validation-only spread scale
+(KA 0.74, TL 1.32; raw coverage was 0.989 and 0.87). TL's peak error is still
+worse than last week, and both advisory wMAPE bars fail. Verdict FAIL. The
+desk page has the reasons and what still has to be collected.
 
 ## Notebook (use this on a new dump)
 
